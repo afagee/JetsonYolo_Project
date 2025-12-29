@@ -1,0 +1,51 @@
+# Build directory
+build/
+*.o
+*.so
+*.a
+
+# Executable
+JetsonYolo_Project
+
+# Model files (có thể rất lớn)
+models/*.pt
+models/*.wts
+models/*.engine
+
+# Data files
+data/*.mp4
+data/*.avi
+data/*.jpg
+data/*.png
+
+# Output files
+*.mp4
+*.avi
+output_*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Logs
+*.log
+
