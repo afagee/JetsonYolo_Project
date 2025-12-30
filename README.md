@@ -64,6 +64,8 @@ TensorRT thường được cài đặt sẵn với JetPack.
    ```bash
    # Tải từ ultralytics hoặc sử dụng model có sẵn
    wget https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5n.pt
+   # Tải đúng bản v6.1 (Link chính chủ từ GitHub Release)
+   wget https://github.com/ultralytics/yolov5/releases/download/v6.1/yolov5n.pt
    mv yolov5n.pt models/
    ```
 
@@ -82,7 +84,7 @@ TensorRT thường được cài đặt sẵn với JetPack.
    ```bash
    # Clone yolov5 repository (nếu chưa có)
    cd ~
-   git clone https://github.com/wang-xinyu/tensorrtx.git
+   git clone -b yolov5-v6.0 https://github.com/wang-xinyu/tensorrtx.git
    cd tensorrtx/yolov5
    
    # Copy file .wts vào thư mục này
