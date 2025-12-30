@@ -84,7 +84,7 @@ TensorRT thường được cài đặt sẵn với JetPack.
    ```bash
    # Clone yolov5 repository (nếu chưa có)
    cd ~
-   git clone https://github.com/wang-xinyu/tensorrtx.git
+   git clone -b yolov5-v6.0 https://github.com/wang-xinyu/tensorrtx.git
    cd tensorrtx/yolov5
    
    # Copy file .wts vào thư mục này
