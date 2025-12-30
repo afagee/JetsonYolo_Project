@@ -1,73 +1,56 @@
 cmake_minimum_required(VERSION 3.10)
 project(JetsonYolo_Project)
 
-# Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+# --- 1. CẤU HÌNH CUDA 10.2 (Bắt buộc cho JetPack 4.6) ---
+set(CUDA_TOOLKIT_ROOT_DIR /usr/local/cuda-10.2)
+set(CMAKE_CUDA_COMPILER /usr/local/cuda-10.2/bin/nvcc)
+include_directories(/usr/local/cuda-10.2/include)
+link_directories(/usr/local/cuda-10.2/lib64)
+
+# --- 2. CẤU HÌNH COMPILER ---
+# Dùng C++14 để tương thích tốt nhất với CUDA 10.2
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# CUDA
 enable_language(CUDA)
 find_package(CUDA REQUIRED)
 
-# OpenCV
+# Cờ tối ưu riêng cho GPU Maxwell (Jetson Nano)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_53,code=sm_53")
+
+# --- 3. TÌM THƯ VIỆN ---
 find_package(OpenCV REQUIRED)
-include_directories(${OpenCV_INCLUDE_DIRS})
 
-# TensorRT
-set(TENSORRT_ROOT /usr/src/tensorrt)
-set(TENSORRT_INCLUDE_DIR ${TENSORRT_ROOT}/include)
-set(TENSORRT_LIB_DIR ${TENSORRT_ROOT}/lib)
+# TensorRT Paths (Chuẩn JetPack 4.x)
+include_directories(/usr/include/aarch64-linux-gnu)
+link_directories(/usr/lib/aarch64-linux-gnu)
 
-include_directories(${TENSORRT_INCLUDE_DIR})
-link_directories(${TENSORRT_LIB_DIR})
+# Include folder dự án
+include_directories(${CMAKE_SOURCE_DIR}/include)
 
-# CUDA include
-include_directories(/usr/local/cuda/include)
-link_directories(/usr/local/cuda/lib64)
+# --- 4. SOURCE FILES ---
+# Tự động tìm cả file .cpp và .cu (để lấy yololayer.cu)
+file(GLOB SOURCES "src/*.cpp" "src/*.cu")
 
-# Source files
-set(SOURCES
-    src/main.cpp
-    src/yolov5.cpp
-)
+# --- 5. TẠO FILE THỰC THI ---
+add_executable(${PROJECT_NAME} ${SOURCES})
 
-# Header files
-set(HEADERS
-    include/common.hpp
-    include/cuda_utils.h
-    include/logging.h
-    include/yolov5.hpp
-)
-
-# Create executable
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
-
-# Include directories
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${OpenCV_INCLUDE_DIRS}
-    ${TENSORRT_INCLUDE_DIR}
-    /usr/local/cuda/include
-)
-
-# Link libraries
+# --- 6. LIÊN KẾT THƯ VIỆN ---
 target_link_libraries(${PROJECT_NAME}
     ${OpenCV_LIBS}
+    ${CUDA_LIBRARIES}
     nvinfer
-    nvonnxparser
-    cudart
-    cublas
-    curand
+    nvinfer_plugin   # Bắt buộc để load plugin YOLO
+    nvparsers
 )
 
-# CUDA flags
-set_property(TARGET ${PROJECT_NAME} PROPERTY CUDA_SEPARABLE_COMPILATION ON)
-
-# Compiler flags
+# --- 7. CỜ BIÊN DỊCH (ĐÃ FIX LỖI WALL) ---
 target_compile_options(${PROJECT_NAME} PRIVATE
-    -Wall
-    -Wextra
-    -O3
+    # Cờ này chỉ dành cho C++ (GCC)
+    $<$<COMPILE_LANGUAGE:CXX>:-Wall -O3 -Wno-unused-function>
+    
+    # Cờ này chỉ dành cho CUDA (NVCC) - Không được dùng -Wall
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3>
 )
 
 # Output directory
@@ -75,3 +58,4 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+message(STATUS "Setup complete. Sources: ${SOURCES}")

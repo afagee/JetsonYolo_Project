@@ -1,31 +1,18 @@
-#ifndef CUDA_UTILS_H
-#define CUDA_UTILS_H
+#ifndef TRTX_CUDA_UTILS_H_
+#define TRTX_CUDA_UTILS_H_
 
-#include <cuda_runtime.h>
-#include <iostream>
+#include <cuda_runtime_api.h>
 
-// Macro để kiểm tra lỗi CUDA
-#define CUDA_CHECK(call) \
-    do { \
-        cudaError_t error = call; \
-        if (error != cudaSuccess) { \
-            std::cerr << "CUDA error at " << __FILE__ << ":" << __LINE__ \
-                      << " - " << cudaGetErrorString(error) << std::endl; \
-            exit(1); \
-        } \
-    } while(0)
+#ifndef CUDA_CHECK
+#define CUDA_CHECK(callstr)\
+    {\
+        cudaError_t error_code = callstr;\
+        if (error_code != cudaSuccess) {\
+            std::cerr << "CUDA error " << error_code << " at " << __FILE__ << ":" << __LINE__;\
+            assert(0);\
+        }\
+    }
+#endif  // CUDA_CHECK
 
-// Macro để kiểm tra lỗi CUDA kernel
-#define CUDA_CHECK_KERNEL() \
-    do { \
-        cudaError_t error = cudaGetLastError(); \
-        if (error != cudaSuccess) { \
-            std::cerr << "CUDA kernel error at " << __FILE__ << ":" << __LINE__ \
-                      << " - " << cudaGetErrorString(error) << std::endl; \
-            exit(1); \
-        } \
-        CUDA_CHECK(cudaDeviceSynchronize()); \
-    } while(0)
-
-#endif // CUDA_UTILS_H
+#endif  // TRTX_CUDA_UTILS_H_
 
