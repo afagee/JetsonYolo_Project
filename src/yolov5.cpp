@@ -121,53 +121,69 @@ std::vector<Detection> YOLOv5::detect(const cv::Mat& img) {
     return nms(postprocess(img.cols, img.rows));
 }
 
-// Hàm này đã được sửa lại giống hệt phiên bản Debug (Tính scale ngay lập tức)
+// Hàm postprocess đã được sửa để đọc đúng format output từ YOLO plugin
+// Plugin output format: [count(float), Detection1, Detection2, ...]
+// Mỗi Detection có: bbox[4] (center_x, center_y, w, h), conf, class_id = 6 floats
 std::vector<Detection> YOLOv5::postprocess(int img_w, int img_h) {
     std::vector<Detection> detections;
-    int num_detections = output_size_ / 85;
+    
+    // Đọc số lượng detections từ phần tử đầu tiên
+    int num_detections = static_cast<int>(h_output_data_[0]);
+    
+    // Kiểm tra hợp lệ
+    if (num_detections <= 0 || num_detections > 1000) {
+        return detections; // Trả về empty nếu không hợp lệ
+    }
+    
+    // Kiểm tra buffer bounds
+    const int DETECTION_SIZE = 6; // 4 bbox + 1 conf + 1 class_id
+    int required_size = 1 + num_detections * DETECTION_SIZE;
+    if (required_size > output_size_) {
+        std::cerr << "Warning: Output buffer size mismatch. Expected at least " 
+                  << required_size << " floats, got " << output_size_ << std::endl;
+        num_detections = (output_size_ - 1) / DETECTION_SIZE; // Giới hạn số lượng
+    }
     
     float scale_x = (float)img_w / input_w_;
     float scale_y = (float)img_h / input_h_;
 
+    // Bắt đầu đọc từ offset 1 (sau count)
     for (int i = 0; i < num_detections; ++i) {
-        float* det = h_output_data_ + i * 85;
-        float conf = det[4];
+        float* det_ptr = h_output_data_ + 1 + i * DETECTION_SIZE;
         
-        // Chỉ bỏ qua nếu quá thấp (ví dụ < 10%)
-        if (conf < 0.1f) continue;
-
-        float max_class_conf = 0.0f;
-        int class_id = -1;
-        for (int j = 5; j < 85; ++j) {
-            if (det[j] > max_class_conf) {
-                max_class_conf = det[j];
-                class_id = j - 5;
-            }
-        }
+        // Đọc Detection struct từ plugin output
+        float center_x = det_ptr[0];  // bbox[0]
+        float center_y = det_ptr[1];  // bbox[1]
+        float w = det_ptr[2];         // bbox[2]
+        float h = det_ptr[3];         // bbox[3]
+        float conf = det_ptr[4];      // confidence (đã được tính sẵn: box_conf * cls_conf)
+        float class_id_float = det_ptr[5]; // class_id
         
-        float final_conf = conf * max_class_conf;
-        if (final_conf < 0.1f) continue;
-
-        // --- ĐOẠN DEBUG QUAN TRỌNG ---
-        // In ra để biết nó nhìn thấy gì
-        std::cout << "DEBUG: Found Class ID: " << class_id 
-                  << " - Conf: " << final_conf 
-                  << " (Person is ID 0)" << std::endl;
+        // Chuyển đổi class_id từ float sang int (plugin ghi int nhưng struct là float)
+        int class_id = static_cast<int>(class_id_float + 0.5f); // Làm tròn để tránh lỗi do float precision
         
-        // Tạm thời KHÔNG LỌC class_id != 0 nữa để xem nó ra cái gì
-        // if (class_id != 0) continue; 
-        // -----------------------------
-
-        float x = det[0], y = det[1], w = det[2], h = det[3];
+        // Lọc theo confidence threshold
+        if (conf < conf_threshold_) continue;
+        
+        // Kiểm tra class_id hợp lệ
+        if (class_id < 0 || class_id >= 80) continue;
+        
+        // Kiểm tra bounding box hợp lệ
+        if (w <= 0 || h <= 0) continue;
+        
+        // Chuyển đổi từ center_x, center_y, w, h sang x1, y1, x2, y2
+        // và scale về kích thước ảnh gốc
         Detection d;
-        d.x1 = (x - w/2) * scale_x;
-        d.y1 = (y - h/2) * scale_y;
-        d.x2 = (x + w/2) * scale_x;
-        d.y2 = (y + h/2) * scale_y;
-        d.confidence = final_conf;
+        d.x1 = (center_x - w / 2.0f) * scale_x;
+        d.y1 = (center_y - h / 2.0f) * scale_y;
+        d.x2 = (center_x + w / 2.0f) * scale_x;
+        d.y2 = (center_y + h / 2.0f) * scale_y;
+        d.confidence = conf;
         d.class_id = class_id;
+        
         detections.push_back(d);
     }
+    
     return detections;
 }
 std::vector<Detection> YOLOv5::nms(const std::vector<Detection>& detections) {
@@ -206,6 +222,23 @@ void YOLOv5::drawDetections(cv::Mat& img, const std::vector<Detection>& detectio
         int x2 = std::min(img.cols-1, (int)det.x2);
         int y2 = std::min(img.rows-1, (int)det.y2);
         
-        cv::rectangle(img, cv::Rect(x1, y1, x2-x1, y2-y1), cv::Scalar(0,255,0), 2);
+        // Kiểm tra hợp lệ của bounding box
+        if (x2 <= x1 || y2 <= y1) continue;
+        
+        cv::Scalar color(0, 255, 0); // Màu xanh lá
+        cv::rectangle(img, cv::Rect(x1, y1, x2-x1, y2-y1), color, 2);
+        
+        // Vẽ label với class name và confidence
+        if (det.class_id >= 0 && det.class_id < static_cast<int>(class_names_.size())) {
+            std::string label = class_names_[det.class_id] + ": " + 
+                               std::to_string(det.confidence).substr(0, 4);
+            
+            int baseline = 0;
+            cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+            cv::rectangle(img, cv::Point(x1, y1 - text_size.height - 5),
+                         cv::Point(x1 + text_size.width, y1), color, -1);
+            cv::putText(img, label, cv::Point(x1, y1 - 5),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+        }
     }
 }
