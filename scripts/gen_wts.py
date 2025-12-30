@@ -1,66 +1,53 @@
-"""
-Script để convert YOLOv5 PyTorch model (.pt) sang file .wts
-File .wts này sẽ được sử dụng để build TensorRT engine trên Jetson Nano
-"""
-
-import torch
-import struct
 import sys
+import argparse
+import os
+import struct
+import torch
+from utils.torch_utils import select_device
 
-def convert_pt_to_wts(pt_path, wts_path):
-    """
-    Convert PyTorch model (.pt) to .wts format
-    
-    Args:
-        pt_path: Đường dẫn đến file .pt
-        wts_path: Đường dẫn để lưu file .wts
-    """
-    print(f"Loading PyTorch model from: {pt_path}")
+def parse_args():
+    parser = argparse.ArgumentParser(description='Convert .pt file to .wts')
+    parser.add_argument('-w', '--weights', required=True, help='Input weights (.pt) file path (required)')
+    parser.add_argument('-o', '--output', required=True, help='Output (.wts) file path (required)')
+    parser.add_argument('-t', '--type', type=str, default='detect', help='model type: detect/cls/seg')
+    args = parser.parse_args()
+    if not os.path.isfile(args.weights):
+        raise SystemExit('Invalid input file')
+    if not os.path.exists(os.path.dirname(args.output)):
+        os.makedirs(os.path.dirname(args.output))
+    return args
+
+def main():
+    args = parse_args()
+    pt_file = args.weights
+    wts_file = args.output
+
+    print(f'Loading {pt_file}')
+    device = select_device('cpu')
     
     # Load model
     model = torch.load(pt_path, map_location='cpu', weights_only=False)
     
-    # Nếu model là dictionary (checkpoint), lấy 'model' key
-    if isinstance(model, dict):
-        if 'model' in model:
-            model = model['model']
-        elif 'state_dict' in model:
-            # Nếu chỉ có state_dict, cần load lại với YOLOv5
-            print("Warning: Only state_dict found. Please use full model export.")
-            sys.exit(1)
+    # Load weights properly
+    if model.get('model'):
+        model = model['model']
     
-    # Lấy state_dict
-    if hasattr(model, 'state_dict'):
-        state_dict = model.state_dict()
-    elif isinstance(model, dict):
-        state_dict = model
-    else:
-        print("Error: Cannot extract state_dict from model")
-        sys.exit(1)
-    
-    # Ghi vào file .wts
-    print(f"Writing weights to: {wts_path}")
-    with open(wts_path, 'w') as f:
-        f.write('{}\n'.format(len(state_dict)))
+    model.to(device).float()
+    model.eval()  # QUAN TRỌNG: Phải eval() để register các buffer như strides/anchors
+
+    print(f'Writing into {wts_file}')
+    with open(wts_file, 'w') as f:
+        # Ghi số lượng phần tử
+        f.write('{}\n'.format(len(model.state_dict().keys())))
         
-        for k, v in state_dict.items():
+        # Duyệt qua từng layer
+        for k, v in model.state_dict().items():
             vr = v.reshape(-1).cpu().numpy()
             f.write('{} {} '.format(k, len(vr)))
             for vv in vr:
                 f.write(' ')
                 f.write(struct.pack('>f', float(vv)).hex())
             f.write('\n')
-    
-    print("Conversion completed successfully!")
 
 if __name__ == '__main__':
-    if len(sys.argv) < 3:
-        print("Usage: python gen_wts.py <input.pt> <output.wts>")
-        print("Example: python gen_wts.py ../models/yolov5n.pt ../models/yolov5n.wts")
-        sys.exit(1)
-    
-    pt_path = sys.argv[1]
-    wts_path = sys.argv[2]
-    
-    convert_pt_to_wts(pt_path, wts_path)
-
+    main()
