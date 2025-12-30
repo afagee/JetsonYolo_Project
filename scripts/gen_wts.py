@@ -18,7 +18,7 @@ def convert_pt_to_wts(pt_path, wts_path):
     print(f"Loading PyTorch model from: {pt_path}")
     
     # Load model
-    model = torch.load(pt_path, map_location='cpu')
+    model = torch.load(pt_path, map_location='cpu', weights_only=False)
     
     # Nếu model là dictionary (checkpoint), lấy 'model' key
     if isinstance(model, dict):
