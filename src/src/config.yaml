@@ -1,0 +1,17 @@
+# config.yaml
+weights: "yolov5s.engine"   # Dùng bản S cho chính xác
+img_size: 512               # Size 512 nhẹ hơn 640, nét hơn 416
+conf_thres: 0.4             # Lọc kỹ
+iou_thres: 0.45
+device: "0"
+classes: [0] 
+
+# Tracker
+dist_threshold: 150         # Khoảng cách nối ID
+max_disappeared: 5          # [MỚI] Nếu mất dấu 5 frame liên tiếp mới xóa ID (giúp ID không bị nhảy)
+
+source: "output1.avi"
+# Source: "rtsp://..." # Nếu dùng camera IP
+process_width: 960
+process_height: 540
+line_coords: [480, 0, 480, 540]
