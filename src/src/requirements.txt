@@ -14,3 +14,7 @@ requests>=2.23.0
 scipy>=1.4.1
 thop  # Thư viện tính toán FLOPs cho YOLOv5
 pillow
+scipy
+filterpy
+scikit-image
+lap

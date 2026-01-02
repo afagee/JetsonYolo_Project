@@ -50,7 +50,7 @@ Copy code dự án (main.py, tracker.py, config.yaml...) vào thư mục làm vi
 
 ```Bash
 # Clone đúng phiên bản v6.1
-git clone --branch v6.1 [https://github.com/ultralytics/yolov5](https://github.com/ultralytics/yolov5)
+git clone --branch v6.1 https://github.com/ultralytics/yolov5
 
 # Chỉnh sửa requirements của YOLOv5 để tránh xung đột với PyTorch đã cài
 cd yolov5

@@ -1,3 +1,4 @@
+# main.py
 import sys
 import time
 import cv2
@@ -21,18 +22,45 @@ except ImportError:
     print("LỖI: Không tìm thấy folder 'yolov5'.")
     sys.exit()
 
-from yolov5.tracker import EuclideanDistTracker
+# IMPORT SORT THAY VÌ TRACKER CŨ
+from sort import Sort
 
-# --- CLASS ĐỌC VIDEO ĐA LUỒNG (BÍ QUYẾT TĂNG TỐC) ---
+# --- HÀM TẠO PIPELINE GSTREAMER (QUAN TRỌNG CHO JETSON) ---
+def gstreamer_pipeline(
+    sensor_id=0,
+    capture_width=960,
+    capture_height=720,
+    display_width=640,
+    display_height=360,
+    framerate=30,
+    flip_method=0,
+):
+    return (
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM), width=(int)%d, height=(int)%d, format=(string)NV12, framerate=(fraction)%d/1 ! "
+        "nvvidconv flip-method=%d ! "
+        "video/x-raw, width=(int)%d, height=(int)%d, format=(string)BGRx ! "
+        "videoconvert ! "
+        "video/x-raw, format=(string)BGR ! appsink"
+        % (sensor_id, capture_width, capture_height, framerate, flip_method, display_width, display_height)
+    )
+
 class CameraLoader:
-    def __init__(self, src=0):
-        self.stream = cv2.VideoCapture(src)
+    def __init__(self, src=0, use_gstreamer=False):
+        if use_gstreamer and isinstance(src, int):
+            # Nếu dùng Camera CSI (Ribbon cable)
+            gstreamer_str = gstreamer_pipeline(sensor_id=src)
+            self.stream = cv2.VideoCapture(gstreamer_str, cv2.CAP_GSTREAMER)
+            print(f"--- Đang dùng GStreamer Pipeline: {gstreamer_str} ---")
+        else:
+            # Nếu dùng USB Camera hoặc File Video
+            self.stream = cv2.VideoCapture(src)
+            
         (self.grabbed, self.frame) = self.stream.read()
         self.stopped = False
-        self.fps_cap = 0
 
     def start(self):
-        Thread(target=self.update, args=()).start()
+        Thread(target=self.update, args=(), daemon=True).start()
         return self
 
     def update(self):
@@ -41,11 +69,8 @@ class CameraLoader:
                 self.stream.release()
                 return
             (self.grabbed, self.frame) = self.stream.read()
-            if not self.grabbed: # Hết video hoặc lỗi
-                self.stopped = True
-            
-            # Giảm tải thread đọc nếu cần (để tránh ngốn CPU quá mức)
-            time.sleep(0.01) 
+            # Ngủ cực ngắn để không chiếm CPU của luồng chính
+            time.sleep(0.005) 
 
     def read(self):
         return self.grabbed, self.frame
@@ -61,12 +86,13 @@ def get_jetson_stats():
     cpu = psutil.cpu_percent()
     gpu = 0
     try:
+        # Đọc tải GPU TeX (Tegra)
         with open("/sys/devices/gpu.0/load", "r") as f:
             gpu = int(f.read().strip()) / 10.0
     except: pass
     return cpu, gpu
 
-# --- HÀM TOÁN HỌC ---
+# --- LOGIC ĐẾM NGƯỜI ---
 def intersect(A, B, C, D):
     def ccw(p1, p2, p3):
         return (p3[1]-p1[1]) * (p2[0]-p1[0]) > (p2[1]-p1[1]) * (p3[0]-p1[0])
@@ -83,121 +109,132 @@ def main():
 
     # 1. Setup Model
     device = select_device(cfg['device'])
-    model = DetectMultiBackend(cfg['weights'], device=device, dnn=False, fp16=False)
+    model = DetectMultiBackend(cfg['weights'], device=device, dnn=False, fp16=True) # Bật FP16
     stride, pt = model.stride, model.pt
-    imgsz = cfg['img_size']
-    if pt: imgsz = check_img_size(imgsz, s=stride)
-    use_fp16 = (model.fp16 and device.type != 'cpu')
-
-    # 2. Setup Camera Loader (Đa luồng)
-    src = cfg['source']
-    if str(src).isdigit(): src = int(src)
+    imgsz = check_img_size(cfg['img_size'], s=stride)
     
-    # Khởi động luồng đọc camera
-    cam = CameraLoader(src).start()
-    time.sleep(1.0) # Chờ cam khởi động
+    # 2. Setup Camera
+    src = cfg['source']
+    use_gst = False
+    if str(src).isdigit(): 
+        src = int(src)
+        use_gst = True # Tự động bật GStreamer nếu input là số (Camera)
+    
+    cam = CameraLoader(src, use_gstreamer=use_gst).start()
+    time.sleep(1.0)
 
-    # 3. Setup Tracker Nâng cao
-    dist_thres = cfg.get('dist_threshold', 100)
-    max_gone = cfg.get('max_disappeared', 5)
-    tracker = EuclideanDistTracker(dist_threshold=dist_thres, max_disappeared=max_gone)
+    # 3. Setup SORT Tracker (Mới)
+    # max_age: số frame giữ ID khi bị mất dấu (quan trọng khi bị che khuất)
+    tracker = Sort(max_age=20, min_hits=3, iou_threshold=0.3)
     
     track_history = {}
     count_in, count_out = 0, 0
     line = cfg['line_coords'] 
-    proc_w, proc_h = cfg['process_width'], cfg['process_height']
+    
+    # Pre-calculate line vector for speed
+    line_start = (line[0], line[1])
+    line_end = (line[2], line[3])
 
-    # 4. Display & Warmup
-    window_name = "Jetson Pro Counter"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, 1280, 720)
+    window_name = "Jetson Pro SORT"
 
-    if device.type != 'cpu':
-        im_type = torch.half if use_fp16 else torch.float
-        model(torch.zeros(1, 3, imgsz, imgsz).to(device).type(im_type))
-
-    # Stats
     prev_time = time.time()
     fps = 0
-    hw_cpu, hw_gpu = 0, 0
-    frame_count = 0
+    frame_idx = 0
 
     while True:
-        # Đọc từ luồng riêng (Cực nhanh, không block)
-        grabbed, frame_raw = cam.read()
-        
+        grabbed, frame = cam.read()
         if not grabbed:
-            if isinstance(src, str): break # Hết video
-            else: continue # Lỗi cam, thử lại
-        
-        frame_count += 1
-        
-        # Resize nhẹ để xử lý vẽ
-        frame = cv2.resize(frame_raw, (proc_w, proc_h))
+            if isinstance(src, str): break 
+            continue
 
-        # --- AI INFERENCE ---
+        frame_idx += 1
+        
+        # --- PRE-PROCESS ---
         img = letterbox(frame, imgsz, stride=stride, auto=pt)[0]
         img = img.transpose((2, 0, 1))[::-1]
         img = np.ascontiguousarray(img)
         img = torch.from_numpy(img).to(device)
-        img = img.half() if use_fp16 else img.float()
+        img = img.half() if model.fp16 else img.float()
         img /= 255.0
         if len(img.shape) == 3: img = img[None]
 
+        # --- INFERENCE ---
         pred = model(img, augment=False, visualize=False)
         pred = non_max_suppression(pred, cfg['conf_thres'], cfg['iou_thres'], classes=cfg['classes'])
-        
-        # --- PROCESS ---
-        detections = []
+
+        # --- PREPARE FOR TRACKER ---
+        dets_to_sort = []
         for det in pred:
             if len(det):
                 det[:, :4] = scale_boxes(img.shape[2:], det[:, :4], frame.shape).round()
+                # SORT cần format: [x1, y1, x2, y2, score]
+                # Code gốc output: [x1, y1, x2, y2, conf, cls]
                 for *xyxy, conf, cls in det:
-                    detections.append([int(xyxy[0]), int(xyxy[1]), int(xyxy[2])-int(xyxy[0]), int(xyxy[3])-int(xyxy[1])])
+                    dets_to_sort.append([xyxy[0].item(), xyxy[1].item(), xyxy[2].item(), xyxy[3].item(), conf.item()])
+        
+        dets_to_sort = np.array(dets_to_sort)
+        if len(dets_to_sort) == 0:
+            dets_to_sort = np.empty((0, 5))
 
-        # --- TRACKING ---
-        boxes_ids = tracker.update(detections)
+        # --- TRACKING UPDATE ---
+        tracked_dets = tracker.update(dets_to_sort)
+        # tracked_dets trả về format: [cx, cy, w, h, id] (do hàm Sort đã convert lại)
 
-        # --- DRAWING ---
-        cv2.line(frame, (line[0], line[1]), (line[2], line[3]), (0, 255, 255), 2)
+        # --- DRAWING & COUNTING ---
+        cv2.line(frame, line_start, line_end, (0, 255, 255), 2)
 
-        for box_id in boxes_ids:
-            x, y, w, h, id, cx, cy = box_id
+        for trk in tracked_dets:
+            # Sort trả về float, cần ép kiểu int
+            cx, cy, w, h, trk_id = trk
+            cx, cy, w, h, trk_id = int(cx), int(cy), int(w), int(h), int(trk_id)
             
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(frame, f"{id}", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            cv2.circle(frame, (cx, cy), 3, (255, 0, 0), -1)
+            # Tính lại toạ độ box để vẽ (vì SORT trả về cx, cy)
+            x1 = int(cx - w/2)
+            y1 = int(cy - h/2)
+            
+            cv2.rectangle(frame, (x1, y1), (x1+w, y1+h), (0, 255, 0), 2)
+            cv2.putText(frame, str(trk_id), (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.circle(frame, (cx, cy), 4, (255, 0, 0), -1)
 
+            # Logic Đếm (Giữ nguyên logic vector cũ của bạn vì nó tốt)
             curr_point = (cx, cy)
-            if id not in track_history:
-                track_history[id] = [curr_point]
+            if trk_id not in track_history:
+                track_history[trk_id] = [curr_point]
             else:
-                track_history[id].append(curr_point)
-                if len(track_history[id]) > 15: track_history[id].pop(0)
+                track_history[trk_id].append(curr_point)
+                if len(track_history[trk_id]) > 30: track_history[trk_id].pop(0)
 
-            if len(track_history[id]) >= 2:
-                prev_point = track_history[id][-2]
-                if intersect((line[0], line[1]), (line[2], line[3]), prev_point, curr_point):
-                    cross_prod = vector_cross_product((line[0], line[1]), (line[2], line[3]), curr_point)
-                    if cross_prod > 0: count_in += 1
-                    else: count_out += 1
-                    track_history[id] = []
-                    cv2.line(frame, (line[0], line[1]), (line[2], line[3]), (0, 0, 255), 4)
+            if len(track_history[trk_id]) >= 2:
+                prev_point = track_history[trk_id][-2]
+                
+                # Kiểm tra cắt đường line
+                if intersect(line_start, line_end, prev_point, curr_point):
+                    cross = vector_cross_product(line_start, line_end, curr_point)
+                    
+                    # Thêm điều kiện: Phải di chuyển một đoạn đủ xa để tránh nhiễu
+                    dist_moved = np.linalg.norm(np.array(curr_point) - np.array(prev_point))
+                    
+                    if dist_moved > 5: # Chỉ đếm nếu di chuyển > 5 pixels
+                        if cross > 0: 
+                            count_in += 1
+                            cv2.line(frame, line_start, line_end, (0, 0, 255), 4) # Hiệu ứng nháy đỏ
+                        else: 
+                            count_out += 1
+                            cv2.line(frame, line_start, line_end, (255, 0, 255), 4) # Hiệu ứng nháy tím
+                        
+                        # Xóa lịch sử để tránh đếm trùng ngay lập tức
+                        track_history[trk_id] = []
 
         # --- STATS ---
-        t2 = time.time()
-        fps = (fps * 0.95) + (1/(t2-prev_time) * 0.05)
-        prev_time = t2
+        curr_time = time.time()
+        fps = (fps * 0.9) + (1/(curr_time - prev_time) * 0.1)
+        prev_time = curr_time
         
-        if frame_count % 30 == 0: hw_cpu, hw_gpu = get_jetson_stats()
-
-        cv2.rectangle(frame, (0, 0), (200, 90), (0, 0, 0), -1)
-        cv2.putText(frame, f"FPS: {int(fps)}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        cv2.putText(frame, f"CPU: {hw_cpu}% GPU: {hw_gpu}%", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-        cv2.putText(frame, f"IN: {count_in} | OUT: {count_out}", (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(frame, f"FPS: {int(fps)}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        cv2.putText(frame, f"IN: {count_in} OUT: {count_out}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
         cv2.imshow(window_name, frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
+        if cv2.waitKey(1) == ord('q'): break
 
     cam.stop()
     cv2.destroyAllWindows()

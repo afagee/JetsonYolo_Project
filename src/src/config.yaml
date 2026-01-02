@@ -1,17 +1,27 @@
 # config.yaml
 weights: "yolov5s.engine"   # Dùng bản S cho chính xác
 img_size: 512               # Size 512 nhẹ hơn 640, nét hơn 416
-conf_thres: 0.4             # Lọc kỹ
-iou_thres: 0.45
+conf_thres: 0.3             # Giảm để detect người đi xe máy/xe đạp tốt hơn
+iou_thres: 0.45               # Giảm để tách box tốt hơn, tránh gộp 2 người
 device: "0"
 classes: [0] 
 
 # Tracker
 dist_threshold: 150         # Khoảng cách nối ID
 max_disappeared: 5          # [MỚI] Nếu mất dấu 5 frame liên tiếp mới xóa ID (giúp ID không bị nhảy)
+# max_age: 30                 # Số frame giữ ID khi mất dấu
+# min_hits: 2                 # Số frame tối thiểu để track được coi là hợp lệ
+
+# # Box Filter (để tách box lớn chứa nhiều người)
+# max_area_ratio: 2.5         # Box lớn hơn trung bình bao nhiêu lần thì split
+# min_box_area: 1000          # Diện tích box tối thiểu (pixels^2)
 
 source: "output1.avi"
 # Source: "rtsp://..." # Nếu dùng camera IP
 process_width: 960
 process_height: 540
-line_coords: [480, 0, 480, 540]
+line_coords: [1080, 0, 1080, 1920]
+# roi_points: [[100, 100], [900, 100], [900, 600], [100, 600]]
+    
+# reverse_direction: True # Đổi thành True nếu Vào/Ra bị ngược
+# show_roi: True
