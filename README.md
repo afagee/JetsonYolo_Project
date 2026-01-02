@@ -1,6 +1,6 @@
 # JetsonYolo_Project - YOLOv5 TensorRT trên Jetson Nano
 
-Dự án triển khai YOLOv5 với TensorRT trên Jetson Nano để tối ưu hóa hiệu suất inference.
+Dự án triển khai YOLOv5 với TensorRT trên Jetson Nano để tối ưu hóa hiệu suất inference. Dự án bao gồm tính năng **đếm người vào/ra** với tracking và hiển thị trực quan trên video.
 
 ## 📁 Cấu trúc thư mục
 
@@ -16,6 +16,7 @@ JetsonYolo_Project/
 │   ├── common.hpp          # Các struct chung (Detection, Box...)
 │   ├── cuda_utils.h        # Hàm kiểm tra lỗi CUDA
 │   ├── logging.h           # Logger bắt buộc của TensorRT
+│   ├── people_counter.hpp  # Khai báo Class PeopleCounter (đếm người vào/ra)
 │   └── yolov5.hpp          # Khai báo Class YOLOv5
 ├── models/                 # Chứa weights
 │   ├── yolov5n.pt          # Model gốc (để tham khảo)
@@ -27,6 +28,7 @@ JetsonYolo_Project/
 │   └── compare_fps.py      # Code Python chạy chậm (để so sánh benchmark)
 └── src/                    # Chứa mã nguồn C++ (.cpp)
     ├── main.cpp            # Hàm main: Đọc video, gọi YOLO, tính FPS
+    ├── people_counter.cpp  # Cài đặt chi tiết các hàm của Class PeopleCounter
     └── yolov5.cpp          # Cài đặt chi tiết các hàm của Class YOLOv5
 ```
 
@@ -197,19 +199,56 @@ make -j4
 
 ### Bước 3: Chạy inference
 
-```bash
-# Chạy với video
-./JetsonYolo_Project ../models/yolov5n.engine ../data/test_video.mp4
+#### Chế độ 1: Chỉ Object Detection (Mặc định)
 
-# Với custom thresholds
-./JetsonYolo_Project ../models/yolov5n.engine ../data/test_video.mp4 0.5 0.4
+```bash
+# Chạy với video - chỉ phát hiện đối tượng, không đếm người
+./JetsonYolo_Project ../models/yolov5n.engine ../data/test_video.mp4
 ```
 
+Chế độ này sẽ:
+- Phát hiện và vẽ bounding box cho tất cả các đối tượng (80 classes)
+- Hiển thị FPS, số lượng detections, và số frame
+- Không có tính năng tracking và đếm người
+
+#### Chế độ 2: Object Detection + Đếm người vào/ra
+
+```bash
+# Chạy với video và bật tính năng đếm người
+./JetsonYolo_Project ../models/yolov5n.engine ../data/test_video.mp4 --count
+# Hoặc dùng flag ngắn
+./JetsonYolo_Project ../models/yolov5n.engine ../data/test_video.mp4 -c
+```
+
+Chế độ này sẽ:
+- Phát hiện và vẽ bounding box cho tất cả các đối tượng
+- **Theo dõi và đếm người vào/ra** với các tính năng:
+  - Tracking người qua các frame
+  - Đếm số người đi vào (từ trên xuống dưới đường đếm)
+  - Đếm số người đi ra (từ dưới lên trên đường đếm)
+  - Hiển thị thông tin trực quan trên video
+
 **Tham số:**
-- `engine_path`: Đường dẫn đến file .engine
-- `video_path`: Đường dẫn đến video input
-- `conf_threshold`: Ngưỡng confidence (mặc định: 0.5)
-- `nms_threshold`: Ngưỡng NMS (mặc định: 0.4)
+- `engine_path`: Đường dẫn đến file .engine (bắt buộc)
+- `video_path`: Đường dẫn đến video input (bắt buộc)
+- `--count` hoặc `-c`: Bật tính năng đếm người vào/ra (tùy chọn)
+
+**Điều khiển bằng bàn phím:**
+- `q` hoặc `ESC`: Thoát chương trình (cả 2 chế độ)
+- **Chỉ khi bật `--count`:**
+  - `r` hoặc `R`: Reset counter về 0
+  - `u` hoặc `U`: Di chuyển đường đếm lên trên (20 pixels)
+  - `d` hoặc `D`: Di chuyển đường đếm xuống dưới (20 pixels)
+
+**Hiển thị trên video (chỉ khi bật `--count`):**
+- **Đường đếm màu đỏ**: Đường ngang để đếm người vào/ra (mặc định ở giữa màn hình)
+- **Điểm màu xanh**: Vị trí center của mỗi người được theo dõi
+- **ID màu xanh**: Số ID của mỗi người
+- **Đường trail màu vàng**: Hiển thị hướng di chuyển của người
+- **Thông tin đếm** (góc trên bên trái):
+  - `Vao: X`: Số người đi vào (màu xanh lá)
+  - `Ra: Y`: Số người đi ra (màu cam)
+  - `Tong: Z`: Số người hiện tại trong khu vực (màu vàng)
 
 ### Bước 4: So sánh với Python (optional)
 
@@ -217,6 +256,23 @@ make -j4
 cd scripts
 python compare_fps.py ../models/yolov5n.pt ../data/test_video.mp4
 ```
+
+## ✨ Tính năng
+
+### 1. Object Detection với YOLOv5 (Luôn bật)
+- Phát hiện đối tượng real-time với YOLOv5
+- Hỗ trợ 80 classes từ COCO dataset
+- Tối ưu hóa với TensorRT cho hiệu suất cao
+- Vẽ bounding box và label cho tất cả các đối tượng được phát hiện
+
+### 2. Đếm người vào/ra (People Counting) - Tùy chọn với `--count`
+- **Tách biệt với detection**: Tính năng này chỉ hoạt động khi được bật bằng flag `--count`
+- **Tracking**: Theo dõi người qua các frame bằng thuật toán distance-based matching
+- **Counting Line**: Đường đếm có thể điều chỉnh để phù hợp với góc quay camera
+- **Direction Detection**: Tự động phân biệt người đi vào và đi ra
+- **Visualization**: Hiển thị trực quan với đường đếm, tracks, và thống kê
+- **Real-time**: Cập nhật số đếm theo thời gian thực
+- **Hiệu suất**: Chỉ khởi tạo và chạy khi được bật, không ảnh hưởng đến hiệu suất khi tắt
 
 ## 📊 Benchmark
 
@@ -259,7 +315,15 @@ Dự án này được tối ưu để đạt hiệu suất cao trên Jetson Nan
 
 - File `.engine` phải được build trên cùng một GPU architecture (Jetson Nano)
 - Model được train trên COCO dataset (80 classes)
-- Output video sẽ được lưu với tên `output_result.mp4`
+- Output video sẽ được lưu với tên `result.avi` (codec MJPG)
+- **Tính năng đếm người** (khi bật với `--count`):
+  - Chỉ hoạt động với class "person" (class_id = 0)
+  - Mỗi người chỉ được đếm một lần khi vượt qua đường đếm
+  - Tracks sẽ tự động xóa sau 10 frame nếu không phát hiện được người
+  - Đường đếm có thể điều chỉnh bằng phím `u`/`d` để phù hợp với góc quay camera
+- **Chế độ detection thuần túy** (không có `--count`):
+  - Chỉ phát hiện và vẽ bounding box, không có tracking
+  - Hiệu suất cao hơn do không có overhead của tracking
 
 ## 📄 License
 
