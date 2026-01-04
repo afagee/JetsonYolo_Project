@@ -306,7 +306,7 @@ Dự án này sử dụng YOLOv5 từ Ultralytics (GPL-3.0 license).
 
 ## 👤 Tác giả
 
-Dự án được tạo cho mục đích học tập và nghiên cứu.
+Vu Van An - Dau Duc Giap
 
 ## 📚 Tài liệu tham khảo
 
