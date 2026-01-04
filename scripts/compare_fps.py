@@ -1,45 +1,71 @@
-"""
-Script Python để chạy YOLOv5 và so sánh FPS với phiên bản C++ TensorRT
-Script này chạy chậm hơn để làm baseline so sánh
-"""
-
 import cv2
 import torch
 import time
 import sys
+import threading
+from queue import Queue
 from pathlib import Path
 
-# Thêm yolov5 vào path (cần clone yolov5 repository)
-# sys.path.append('/path/to/yolov5')
+# --- CLASS GHI VIDEO ĐA LUỒNG ---
+class VideoWriterThread:
+    def __init__(self, path, fps, width, height, queue_size=30):
+        self.path = path
+        # Dùng codec mp4v (software) hoặc thử dùng 'avc1' nếu có hỗ trợ
+        self.fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        self.writer = cv2.VideoWriter(path, self.fourcc, fps, (width, height))
+        self.queue = Queue(maxsize=queue_size)
+        self.stopped = False
+        
+        # Khởi động thread
+        self.thread = threading.Thread(target=self.update, args=())
+        self.thread.daemon = True
+        self.thread.start()
 
-def run_yolov5_python(model_path, video_path, conf_threshold=0.5):
-    """
-    Chạy YOLOv5 bằng Python (PyTorch) để benchmark
-    
-    Args:
-        model_path: Đường dẫn đến model .pt
-        video_path: Đường dẫn đến video
-        conf_threshold: Ngưỡng confidence
-    """
+    def write(self, frame):
+        if self.stopped:
+            return
+        # Nếu queue đầy, ta bỏ qua frame này để không làm chậm luồng chính
+        if not self.queue.full():
+            self.queue.put(frame)
+
+    def update(self):
+        while True:
+            if self.stopped and self.queue.empty():
+                break
+            
+            # Lấy frame từ queue để ghi
+            try:
+                # timeout=1 để thread có thể check cờ stopped
+                frame = self.queue.get(timeout=1)
+                self.writer.write(frame)
+                self.queue.task_done()
+            except:
+                continue
+        
+        self.writer.release()
+
+    def stop(self):
+        self.stopped = True
+        # Đợi thread ghi nốt các frame còn lại trong queue
+        self.thread.join()
+# ------------------------------
+
+def run_yolov5_python(model_path, video_path, conf_threshold=0.4):
     print(f"Loading model from: {model_path}")
     
-    # Load model (cần yolov5 repository)
+    # Load model
     try:
-        # Cách 1: Sử dụng yolov5 package
         import yolov5
         model = yolov5.load(model_path)
-        model.conf = conf_threshold
     except ImportError:
-        # Cách 2: Sử dụng torch.hub
         model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path)
-        model.conf = conf_threshold
     
+    model.conf = conf_threshold
     print("Model loaded successfully!")
     
-    # Mở video
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"Cannot open video: {video_path}")
+        print("Cannot open video")
         return
     
     # Thông tin video
@@ -47,15 +73,21 @@ def run_yolov5_python(model_path, video_path, conf_threshold=0.5):
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    print(f"Video info: {width}x{height} @ {fps} FPS")
+    # --- CẤU HÌNH LƯU VIDEO (THREAD) ---
+    input_path_obj = Path(video_path)
+    output_filename = input_path_obj.stem + "_output" + input_path_obj.suffix
+    output_path = str(input_path_obj.parent / output_filename)
     
-    # Benchmark
+    print(f"Saving output video to: {output_path}")
+    
+    # Khởi tạo Thread ghi video
+    video_writer = VideoWriterThread(output_path, fps, width, height)
+    # -----------------------------------
+    
     frame_count = 0
     total_time = 0.0
     
     print("\nStarting inference...")
-    print("Press 'q' to quit")
-    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -73,40 +105,33 @@ def run_yolov5_python(model_path, video_path, conf_threshold=0.5):
         current_fps = 1.0 / inference_time if inference_time > 0 else 0
         
         # Vẽ kết quả
-        annotated_frame = results.render()[0]
+        annotated_frame = results.render()[0].copy()
         
-        # Hiển thị FPS
         cv2.putText(annotated_frame, f"FPS: {current_fps:.2f}", (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(annotated_frame, f"Detections: {len(results.xyxy[0])}", (10, 70),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
+        # --- ĐẨY VÀO THREAD GHI VIDEO ---
+        # Hàm này sẽ trả về ngay lập tức, không chờ ghi đĩa
+        video_writer.write(annotated_frame)
+        # -------------------------------
+
         cv2.imshow("YOLOv5 Python", annotated_frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
-    # Kết quả
+    # Kết thúc
     avg_fps = frame_count / total_time if total_time > 0 else 0
+    print(f"\nAverage FPS: {avg_fps:.2f}")
     
-    print("\n=== Python Benchmark Results ===")
-    print(f"Total frames: {frame_count}")
-    print(f"Total time: {total_time:.2f} seconds")
-    print(f"Average FPS: {avg_fps:.2f}")
-    print("\nNote: C++ TensorRT version should be significantly faster!")
-    
+    # Dừng thread và giải phóng
+    video_writer.stop()
     cap.release()
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print("Usage: python compare_fps.py <model.pt> <video.mp4> [conf_threshold]")
-        print("Example: python compare_fps.py ../models/yolov5n.pt ../data/test_video.mp4 0.5")
+        print("Usage: python compare_fps.py <model.pt> <video.mp4>")
         sys.exit(1)
     
-    model_path = sys.argv[1]
-    video_path = sys.argv[2]
-    conf_threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
-    
-    run_yolov5_python(model_path, video_path, conf_threshold)
-
+    run_yolov5_python(sys.argv[1], sys.argv[2])

@@ -23,21 +23,25 @@ struct TrackedPerson {
 
 class PeopleCounter {
 public:
-    PeopleCounter(int line_y, int max_disappeared = 10, float max_distance = 100.0f);
+    // Constructor nhận line_x thay vì line_y
+    PeopleCounter(int line_x, int max_disappeared = 10, float max_distance = 100.0f);
     
     void update(const std::vector<Detection>& detections, int img_width, int img_height);
     void draw(cv::Mat& img);
     
     int getCountIn() const { return count_in_; }
     int getCountOut() const { return count_out_; }
-    void setLineY(int y) { line_y_ = y; }
-    int getLineY() const { return line_y_; }
+    
+    // Đổi tên hàm set/get cho trục X
+    void setLineX(int x) { line_x_ = x; }
+    int getLineX() const { return line_x_; }
+    
     void reset();
 
 private:
-    int line_y_;  // Vị trí đường đếm (y coordinate)
-    int max_disappeared_;  // Số frame tối đa một người có thể mất trước khi xóa
-    float max_distance_;  // Khoảng cách tối đa để match detection với track
+    int line_x_;  // Vị trí đường đếm (x coordinate - trục dọc)
+    int max_disappeared_;
+    float max_distance_;
     
     int next_id_;
     std::map<int, TrackedPerson> tracked_objects_;
@@ -47,8 +51,7 @@ private:
     
     float calculateDistance(float x1, float y1, float x2, float y2);
     void updateTracks(const std::vector<Detection>& detections);
-    void checkCrossing();
+    void checkCrossing(); // Logic kiểm tra cắt ngang trục dọc
 };
 
 #endif // PEOPLE_COUNTER_HPP
-

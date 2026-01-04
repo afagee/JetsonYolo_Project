@@ -2,8 +2,9 @@
 #include <algorithm>
 #include <cmath>
 
-PeopleCounter::PeopleCounter(int line_y, int max_disappeared, float max_distance)
-    : line_y_(line_y), max_disappeared_(max_disappeared), max_distance_(max_distance),
+// Constructor cập nhật line_x
+PeopleCounter::PeopleCounter(int line_x, int max_disappeared, float max_distance)
+    : line_x_(line_x), max_disappeared_(max_disappeared), max_distance_(max_distance),
       next_id_(1), count_in_(0), count_out_(0) {
 }
 
@@ -23,7 +24,7 @@ void PeopleCounter::updateTracks(const std::vector<Detection>& detections) {
         }
     }
     
-    // Nếu không có detection nào, tăng frames_since_seen cho tất cả tracks
+    // Nếu không có detection nào, xử lý track biến mất
     if (people_detections.empty()) {
         for (auto it = tracked_objects_.begin(); it != tracked_objects_.end();) {
             it->second.frames_since_seen++;
@@ -43,7 +44,7 @@ void PeopleCounter::updateTracks(const std::vector<Detection>& detections) {
         detection_centers.emplace_back((det.x1 + det.x2) * 0.5f, (det.y1 + det.y2) * 0.5f);
     }
     
-    // Match detections với existing tracks
+    // Match detections với existing tracks (Logic khoảng cách giữ nguyên)
     std::vector<bool> used_detections(people_detections.size(), false);
     
     for (auto& pair : tracked_objects_) {
@@ -86,7 +87,7 @@ void PeopleCounter::updateTracks(const std::vector<Detection>& detections) {
         }
     }
     
-    // Tạo tracks mới cho các detections chưa được match
+    // Tạo tracks mới
     for (size_t i = 0; i < people_detections.size(); ++i) {
         if (!used_detections[i]) {
             int new_id = next_id_++;
@@ -104,16 +105,25 @@ void PeopleCounter::checkCrossing() {
         TrackedPerson& track = pair.second;
         if (track.counted) continue;
         
-        bool prev_above = track.prev_center_y < line_y_;
-        bool curr_above = track.center_y < line_y_;
+        // --- LOGIC MỚI CHO LINE DỌC (KIỂM TRA TRỤC X) ---
+        // Bên trái line: x < line_x
+        // Bên phải line: x > line_x
         
-        if (prev_above != curr_above) {
+        bool prev_left = track.prev_center_x < line_x_;
+        bool curr_left = track.center_x < line_x_;
+        
+        if (prev_left != curr_left) {
             track.counted = true;
-            if (prev_above && !curr_above) {
+            
+            // Từ Trái sang Phải -> Tính là VÀO (IN)
+            if (prev_left && !curr_left) {
                 count_in_++;
-            } else if (!prev_above && curr_above) {
+            } 
+            // Từ Phải sang Trái -> Tính là RA (OUT)
+            else if (!prev_left && curr_left) {
                 count_out_++;
             }
+            // Lưu ý: Nếu muốn đảo ngược logic Vào/Ra, chỉ cần đổi chỗ count_in_ và count_out_ ở trên
         }
     }
 }
@@ -131,10 +141,13 @@ void PeopleCounter::reset() {
 }
 
 void PeopleCounter::draw(cv::Mat& img) {
-    // Vẽ đường đếm
+    // --- VẼ ĐƯỜNG ĐẾM DỌC ---
     const cv::Scalar red(0, 0, 255);
-    cv::line(img, cv::Point(0, line_y_), cv::Point(img.cols, line_y_), red, 2);
-    cv::putText(img, "Counting Line", cv::Point(10, line_y_ - 10),
+    // Vẽ từ (line_x, 0) đến (line_x, img.rows)
+    cv::line(img, cv::Point(line_x_, 0), cv::Point(line_x_, img.rows), red, 2);
+    
+    // Vẽ chữ "Counting Line" xoay dọc hoặc để ngang cạnh line
+    cv::putText(img, "Line", cv::Point(line_x_ + 5, 20),
                 cv::FONT_HERSHEY_SIMPLEX, 0.6, red, 2);
     
     // Vẽ các tracks
@@ -145,26 +158,23 @@ void PeopleCounter::draw(cv::Mat& img) {
         
         cv::circle(img, center, 5, blue, -1);
         cv::putText(img, "ID:" + std::to_string(track.id), 
-                   cv::Point(center.x + 10, center.y - 10),
-                   cv::FONT_HERSHEY_SIMPLEX, 0.5, blue, 2);
+                    cv::Point(center.x + 10, center.y - 10),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, blue, 2);
         
         if (track.frames_since_seen == 0) {
             cv::line(img, cv::Point((int)track.prev_center_x, (int)track.prev_center_y),
-                    center, yellow, 2);
+                     center, yellow, 2);
         }
     }
     
-    // Vẽ thông tin đếm
+    // Vẽ thông tin đếm (Góc trái trên)
     const int text_y = 30, text_height = 25;
+    // Vẽ nền đen mờ cho text dễ đọc
     cv::rectangle(img, cv::Point(10, text_y - 20), 
-                 cv::Point(250, text_y + text_height * 3), cv::Scalar(0, 0, 0), -1);
+                  cv::Point(200, text_y + text_height * 3), cv::Scalar(0, 0, 0), -1);
     
-    cv::putText(img, "Vao: " + std::to_string(count_in_), cv::Point(15, text_y),
-                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-    cv::putText(img, "Ra: " + std::to_string(count_out_), cv::Point(15, text_y + text_height),
-                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 165, 255), 2);
-    cv::putText(img, "Tong: " + std::to_string(count_in_ - count_out_), 
-                cv::Point(15, text_y + text_height * 2),
-                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 0), 2);
+    cv::putText(img, "Vao (L->R): " + std::to_string(count_in_), cv::Point(15, text_y),
+                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+    cv::putText(img, "Ra (R->L): " + std::to_string(count_out_), cv::Point(15, text_y + text_height),
+                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 165, 255), 2);
 }
-
